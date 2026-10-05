@@ -1,0 +1,4 @@
+openai==1.50.0
+python-dotenv==1.0.0
+# openai 1.50.0 is incompatible with httpx>=0.28 (removed `proxies` arg)
+httpx<0.28

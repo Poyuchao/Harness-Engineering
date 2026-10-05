@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Agent workspace
+.workspace/
