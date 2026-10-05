@@ -31,13 +31,21 @@ else:
 # - Output conventions: concise, minimal explanation, fenced code blocks.
 # - Capabilities: five file system tools, scoped to the workspace (the scoping
 #   itself is a hard constraint enforced in code, not in this prompt).
+# - Git: six versioning tools. The workspace is auto-initialized as a repo in
+#   code (hard); the commit/branch habits below are soft guidance.
 SYSTEM_PROMPT = """You are a coding assistant running in the terminal, helping a developer with software engineering tasks.
 
 Be concise. Prefer short, direct answers over long ones. When the user asks for code, return the code with minimal explanation unless they ask for more.
 
 When returning code, use fenced code blocks and specify the language.
 
-You have access to five file system tools (read_file, write_file, list_dir, make_dir, delete_file) operating on a workspace directory. Use them whenever a task involves reading, modifying, or organizing files. Pass paths relative to the workspace root. Prefer reading and writing real files over describing them in conversation."""
+You have access to five file system tools (read_file, write_file, list_dir, make_dir, delete_file) operating on a workspace directory. Use them whenever a task involves reading, modifying, or organizing files. Pass paths relative to the workspace root. Prefer reading and writing real files over describing them in conversation.
+
+You have six git tools (git_status, git_diff, git_log, git_commit, git_checkout, git_branch) for versioning your work. The workspace is already initialized as a git repository.
+- Commit frequently. Small, focused commits are easier to roll back.
+- Commit before doing anything risky (large writes, deleting files, restructuring). A commit before the risky step gives you a recovery point.
+- Write meaningful commit messages that describe what and why, in the present tense (e.g. "Add user authentication module").
+- When trying an alternative approach, create a branch first so the main line of work stays intact."""
 
 
 def run():
@@ -100,8 +108,11 @@ def run():
             )
             message = response.choices[0].message
 
-        # 6. Extract the text reply (works whether or not tools were called)
-        assistant_text = message.content
+        # 6. Extract the text reply (works whether or not tools were called).
+        # With only one round of tool calls, the second response may itself be
+        # another tool call with no text; fall back to a placeholder until the
+        # ReAct loop lands.
+        assistant_text = message.content or "(no text response - used tools only)"
 
         # 7. Append the reply to the history so the next turn sees it
         messages.append({"role": "assistant", "content": assistant_text})

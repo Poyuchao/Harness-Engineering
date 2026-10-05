@@ -1,6 +1,6 @@
 # Agent Harness
 
-A from-scratch agent harness, built over the course of nine chapters.
+A from-scratch coding-agent harness, built layer by layer: loop, tools, execution, memory, observability.
 
 ## Setup
 
@@ -26,20 +26,20 @@ harness/
 ├── agent.py            # 入口：對話迴圈、system prompt、模型選擇
 └── tools/
     ├── registry.py     # 工具登記處：Tool、ToolRegistry、@tool
-    └── filesystem.py   # 檔案工具，限制在 .workspace/ 內
+    ├── filesystem.py   # 檔案工具，限制在 .workspace/ 內
+    └── git.py          # git 工具，.workspace/ 自動初始化為 repo
 ```
 
 ---
 
-# 學習紀錄
+# AI Engineering Notes
 
 ## Chapter 2：Bare Loop
 
 ### 02-01 Project scaffold
 
-- 建立 venv、`requirements.txt`（`openai`、`python-dotenv`）、`.env.example`、`.gitignore`、`harness/` 套件。
-- 用 `smoke.py` 確認能連上 OpenAI API（之後已刪除）。
-- 坑：`openai==1.50.0` 與 `httpx>=0.28` 不相容（`proxies` 參數被移除），需 pin `httpx<0.28`。
+- 依賴刻意保持最小：`openai`、`python-dotenv`。
+- Gotcha：`openai==1.50.0` 與 `httpx>=0.28` 不相容（`proxies` 參數被移除），需 pin `httpx<0.28`。
 
 ### 02-02 Bare loop
 
@@ -48,7 +48,7 @@ harness/
 - 迴圈步驟：讀輸入 → append user 訊息 → 帶完整歷史呼叫模型 → append assistant 回覆 → 印出 → 回到開頭。
 - user 訊息和 assistant 回覆**都要** append，少一個歷史就不完整。
 
-### 02-03 Kimi backend（選用）
+### 02-03 Kimi backend
 
 - Kimi（Moonshot AI）相容 OpenAI API，只需換 `api_key` 和 `base_url`。
 - `.env` 有 `KIMI_API_KEY` 就用 `kimi-k2.6`，否則預設 `gpt-4o-mini`。
@@ -70,9 +70,9 @@ harness/
 
 ### 02-05 Gaps：bare loop 做不到什麼
 
-| 缺口 | 現象 | 解決的章節 |
+| 缺口 | 現象 | 對應的 layer |
 |---|---|---|
-| 讀寫檔案 | 只能請你貼內容 | File System Layer |
+| 讀寫檔案 | 只能請使用者貼內容 | File System Layer |
 | 執行程式/指令 | 只能描述怎麼做 | Code Execution Layer、Sandbox Layer |
 | 長期記憶 | `quit` 後全部忘記（`messages` 只存在記憶體） | File System（agents.md）、Memory & Search（RAG） |
 | 可觀測性 | 不知道用了哪個模型、多少 token | Observability & Evaluation（LangSmith / Langfuse） |
@@ -95,7 +95,7 @@ harness/
   - 依賴是單向的：filesystem 用 registry，registry 不知道 filesystem。新增工具不必改 registry。
 - **檔案工具**（[filesystem.py](harness/tools/filesystem.py)）：`read_file`、`write_file`、`list_dir`、`make_dir`、`delete_file`。
   - 全部限制在 `.workspace/`；`_resolve_path` 擋掉 `../`、絕對路徑等逃逸。這是第一個 **hard constraint**。
-  - `delete_file` 暫時不能刪資料夾（Chapter 5 放寬）。
+  - `delete_file` 暫時不能刪資料夾（之後放寬）。
   - 工具一律回傳訊息字串，讓模型知道結果並繼續。
 - **接進 agent 迴圈**：
   1. 呼叫模型時帶 `tools=registry.get_schemas()`。
@@ -103,4 +103,25 @@ harness/
   3. 再呼叫一次模型，取得最終文字回答。
 - **模型如何選工具**：由模型自己根據工具的 `name`、`description`、system prompt 和對話內容決定（`tool_choice` 預設 `"auto"`）。所以 **docstring 本身就是 prompt**，寫得清楚模型才選得準。
 - **專用工具 vs 通用工具**：拿掉 `write_file` 後模型寫不了檔（它只能輸出文字）；給它 bash 這類通用工具就能做到，但會繞過 `_resolve_path` 的保護，所以後面需要 Sandbox。
-- 目前限制：每輪只處理一次工具呼叫（ReAct 迴圈在後面章節）。
+- 目前限制：每輪只處理一次工具呼叫，待 ReAct loop 解決。
+
+### 03-03 Git versioning
+
+- **版本控制是 harness primitive，不是 prompt 建議。** 只有檔案工具時寫入無法復原，每個錯誤都是永久的 → agent 變得保守、緩慢。有了 git：先 commit 穩定狀態 → 開 branch 嘗試 → 錯了就 rollback。版本控制擴大了 agent 敢嘗試的範圍。
+- **三種能力、六個工具**（[git.py](harness/tools/git.py)）：
+  | 能力 | 工具 |
+  |---|---|
+  | Commit（存檔點） | `git_status`、`git_diff`、`git_commit` |
+  | Rollback（回到過去） | `git_log`、`git_checkout` |
+  | Branching（實驗） | `git_branch`、`git_checkout` |
+- **刻意不做的**：push/pull/fetch（遠端）、merge（衝突需要和使用者雙向溝通）、stash、rebase。等真的需要再加。
+- **直接呼叫 git binary（`subprocess`），不用 GitPython**：
+  1. 行為和開發者在終端機用的一樣。
+  2. 不增加依賴，harness 保持輕量。
+  3. 模型對 git 原始輸出的熟悉度遠高於 GitPython 物件。
+- `_run_git`：在 `.workspace/` 執行、10 秒 timeout（避免卡死）、非 0 exit code 不 raise，而是把輸出回傳給模型。
+- **自動 `git init`**（import 時的 side effect），設定 user 為 `agent`、預設分支 `main`。和自動建立 workspace 同理：做成 hard constraint，不靠模型記得。
+- System prompt 加入 git 習慣（soft）：常做小 commit、危險操作前先 commit、commit 訊息寫 what + why、嘗試替代方案先開 branch。
+- 專案根目錄的 `.gitignore` 要排除 `.workspace/`，避免 workspace 的 `.git` 和外層 repo 衝突。
+- **限制：一輪只能一次工具呼叫。** 「寫檔然後 commit」需要多次來回（write → 看結果 → commit），目前做不到；第二次回應若又是 tool call，`content` 為 `None`，暫時以 `(no text response - used tools only)` 代替。ReAct 迴圈會解決。（同一次回應裡的多個平行 tool call 已由 for loop 處理。）
+- 實作細節：`git_diff` 的 path 也經過 `_resolve_path` 檢查；`git_checkout`/`git_branch` 拒絕 `-` 開頭的名稱，防止被當成 git 選項（如 `--orphan`）。
