@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from harness.memory import load_agents_md
 from harness.tools import registry
 
 load_dotenv()
@@ -33,6 +34,8 @@ else:
 #   itself is a hard constraint enforced in code, not in this prompt).
 # - Git: six versioning tools. The workspace is auto-initialized as a repo in
 #   code (hard); the commit/branch habits below are soft guidance.
+# - Memory: how to maintain AGENTS.md. Loading it is done by the harness
+#   (hard); deciding what to write is left to the model (soft).
 SYSTEM_PROMPT = """You are a coding assistant running in the terminal, helping a developer with software engineering tasks.
 
 Be concise. Prefer short, direct answers over long ones. When the user asks for code, return the code with minimal explanation unless they ask for more.
@@ -45,15 +48,32 @@ You have six git tools (git_status, git_diff, git_log, git_commit, git_checkout,
 - Commit frequently. Small, focused commits are easier to roll back.
 - Commit before doing anything risky (large writes, deleting files, restructuring). A commit before the risky step gives you a recovery point.
 - Write meaningful commit messages that describe what and why, in the present tense (e.g. "Add user authentication module").
-- When trying an alternative approach, create a branch first so the main line of work stays intact."""
+- When trying an alternative approach, create a branch first so the main line of work stays intact.
+
+The workspace contains an AGENTS.md file: your durable memory across sessions. It is automatically loaded into your context at the start of every session. Update it with write_file when you learn something worth remembering for future sessions. Good things to write:
+- Project context: what this codebase is, what it does, who uses it.
+- Conventions you've observed: code style, libraries, naming patterns.
+- Decisions that have been made and the reasoning behind them.
+- Gotchas: quirks, non-obvious dependencies, things that tripped up earlier sessions.
+- Active tasks: what is currently being worked on. Clear them when complete.
+When updating AGENTS.md, keep its existing structure and section headings, and add to the relevant section instead of replacing unrelated content. If a section still holds a parenthetical hint like "(What this project is...)", replace the hint with real content."""
 
 
 def run():
     """Run the agent's conversation loop until the user quits."""
-    # The conversation history. This is the entire memory of the agent.
+    # Load cross-session memory. The harness does this every session (hard
+    # constraint) rather than trusting the model to remember to read it.
+    agents_md = load_agents_md()
+
+    # The conversation history: the agent's working memory for this session.
     # Every turn, we append to it and send the whole thing back.
-    # It starts with the system prompt, so the model sees it on every call.
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # It starts with two system messages, the instructions and then AGENTS.md.
+    # The model reads them as one context; keeping them separate makes each
+    # layer easy to tell apart when debugging.
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": agents_md},
+    ]
 
     print("Agent ready. Type 'quit' or 'exit' to leave.\n")
 

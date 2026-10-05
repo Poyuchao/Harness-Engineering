@@ -24,6 +24,8 @@ python -m harness.agent
 ```
 harness/
 ├── agent.py            # 入口：對話迴圈、system prompt、模型選擇
+├── memory/
+│   └── agents_md.py    # AGENTS.md：跨 session 記憶的載入與模板
 └── tools/
     ├── registry.py     # 工具登記處：Tool、ToolRegistry、@tool
     ├── filesystem.py   # 檔案工具，限制在 .workspace/ 內
@@ -125,3 +127,23 @@ harness/
 - 專案根目錄的 `.gitignore` 要排除 `.workspace/`，避免 workspace 的 `.git` 和外層 repo 衝突。
 - **限制：一輪只能一次工具呼叫。** 「寫檔然後 commit」需要多次來回（write → 看結果 → commit），目前做不到；第二次回應若又是 tool call，`content` 為 `None`，暫時以 `(no text response - used tools only)` 代替。ReAct 迴圈會解決。（同一次回應裡的多個平行 tool call 已由 for loop 處理。）
 - 實作細節：`git_diff` 的 path 也經過 `_resolve_path` 檢查；`git_checkout`/`git_branch` 拒絕 `-` 開頭的名稱，防止被當成 git 選項（如 `--orphan`）。
+
+### 03-04 Cross-session memory：AGENTS.md
+
+- **AGENTS.md**：給 coding agent 的標準靜態指令檔，記錄某個專案中需要跨 session 保留的資訊。session 開始時讀入，過程中/結束時由 agent 更新。
+- **The harness reads, the model writes**：
+  | 動作 | 誰負責 | 性質 | 原因 |
+  |---|---|---|---|
+  | 讀取 | harness，每個 session 開始時自動載入 | Hard | 必須保證發生，不能靠模型記得去讀 |
+  | 寫入 | 模型，用 `write_file` 更新 | Soft | 「什麼值得記住」需要模型判斷，難以寫成規則 |
+- [agents_md.py](harness/memory/agents_md.py)：檔案放在 `.workspace/AGENTS.md`；不存在時以模板建立（import 時的 side effect）。
+- **模板結構**：Project Context / Conventions / Decisions / Gotchas / Active Tasks。每段以括號提示說明該寫什麼，由模型替換成真實內容；Active Tasks 完成後要清掉，避免模型以為工作仍在進行。
+- **注入方式**：在 `messages` 開頭放**兩則 system message** — system prompt 在前、AGENTS.md 內容在後。模型會當作一份連續的 context 讀；分開放是為了在 observability 工具中能分辨不同層，方便 debug。
+- System prompt 加入 AGENTS.md 維護規則：保留既有段落結構、更新相關段落而非整份覆蓋、把括號提示換成實際內容。
+- **觀察到的 soft constraint 失效**：要求「更新記憶檔」時，模型可能另建一個檔案（如 `project_memory`）而不是寫入 AGENTS.md — prompt 指示不保證被遵守。
+- **再次撞上單輪工具上限**：更新 AGENTS.md 需要先 `read_file`（看現有結構）再 `write_file`，一輪只做得到第一步，回覆變成 `(no text response - used tools only)`；需要拆成兩句指令。ReAct loop 會解決。
+- **為什麼 `load_agents_md` 不是 tool**：tool 由模型決定要不要呼叫，不保證發生；讀記憶必須保證發生，所以由 harness 直接呼叫並注入 context。寫入則不需要新工具，AGENTS.md 只是 workspace 裡的普通檔案，模型用 `read_file`/`write_file` 即可。原則同自動建立 workspace、自動 `git init`：**一定要發生的事寫在程式碼裡**。
+- **預先載入的取捨**：
+  - 好處：模型回答第一句前就有專案背景；不消耗工具呼叫（在單輪工具上限下尤其重要）；放在 `messages` 中，整個 session 每一輪都有效。
+  - 代價：每次呼叫都重送，檔案越大 token 成本越高；只在 session 開始讀一次，中途更新要到下個 session 才重新載入（但對話歷史已包含該次寫入）；檔案會持續成長，因此只適合放精簡、長期有效的資訊，大量記憶交給之後的 RAG。
+- 效果：退出後重開 session，agent 能直接回答「在做什麼專案」「用什麼命名慣例」— bare loop 的長期記憶缺口開始被補上。完整的記憶系統（RAG、記憶工具）留給 Memory & Search layer。
