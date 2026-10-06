@@ -36,6 +36,7 @@ Harness-Engineering/
 │       ├── git.py            # git_status、git_diff、git_log、git_commit、git_checkout、git_branch
 │       │                     #   + workspace 自動 git init
 │       └── bash.py           # bash meta tool：在 workspace 執行 shell 指令（Git Bash on Windows）
+│                             #   + allow / deny list policy（預設 deny: rm, sudo, dd）
 ├── .workspace/               # agent 的工作區與獨立 git repo（自動建立，gitignored）
 ├── .env.example              # OPENAI_API_KEY / KIMI_API_KEY 範本
 ├── requirements.txt          # openai、python-dotenv、httpx<0.28
@@ -273,4 +274,25 @@ Harness-Engineering/
   - 「建立含 `pyproject.toml`、`src/`、模組的專案 → 執行驗證 → commit」一次完成，混用 file system、bash、git 工具。
   - 使用者不再需要一步步牽著 agent 走到終點 — action → observation 循環由 agent 自己推動。
 - 之前筆記中「單輪工具上限」相關的限制（03-02 ~ 04-03）至此解除。
+
+### 04-05 Bash policy：allow list / deny list
+
+- bash 能做任何 shell 做得到的事，所以在它之上加一層**指令政策**，在執行前檢查。
+- **三個常數**（[bash.py](harness/tools/bash.py)）：
+  | 常數 | 意義 | 空集合時 |
+  |---|---|---|
+  | `ALLOW_LIST` | 只允許這些指令 | 不限制（不在 deny list 的都允許） |
+  | `DENY_LIST` | 禁止這些指令 | 不禁止任何指令 |
+  | `CHAIN_SEPARATORS` | `&&`、`\|\|`、`;`、`\|`、`&`、換行 | — |
+- **比對方式**：用分隔符號把指令切成 segment，取每段的**第一個 token**（指令名稱）比對。所以 `cd notes && rm -rf x` 會檢查 `cd` 和 `rm`，不會因為開頭是安全指令就放行整串。
+- **Deny 優先（fail closed）**：同一個指令同時在兩個 list 時拒絕執行，和 AWS IAM、防火牆、Linux 權限的慣例一致。
+- **檢查在 `subprocess` 之前**：被拒絕時完全不啟動 shell、沒有副作用，直接回傳 `[policy: 'dd' is on the deny list; refusing to run]` 給模型（方括號 = harness 訊息），讓它改用別的做法或告訴使用者自己執行。
+- 使用情境：
+  - **寬鬆模式**：allow 空、deny 列危險指令（目前預設 `{"rm", "sudo", "dd"}`；刪檔改用受 workspace 限制的 `delete_file`）。
+  - **鎖定模式**：allow 只列已知工具（如 `ls`、`cat`、`wc`、`grep`、`python`），其他一律拒絕。
+- 實作細節：`_first_token` 會跳過 `(`、`{` 與 `VAR=value` 前綴、去掉路徑，所以 `(rm x)`、`FOO=1 rm x`、`/bin/rm x` 都會被認成 `rm`。
+- **已知限制 — 這是字串比對，不是真正的隔離**：
+  - 擋不到包在其他指令裡的動作：`echo $(rm x)`、`` `rm x` ``、`bash -c "rm x"`、`xargs rm`、`python -c "import shutil; shutil.rmtree('x')"`。
+  - 允許 `python` 就等於允許任意程式碼。
+  - 真正的防護要靠 OS 層隔離 → Sandbox layer（Docker）。policy 是第一道防線，不是最後一道。
 
