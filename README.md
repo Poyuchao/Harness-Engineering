@@ -147,3 +147,58 @@ harness/
   - 好處：模型回答第一句前就有專案背景；不消耗工具呼叫（在單輪工具上限下尤其重要）；放在 `messages` 中，整個 session 每一輪都有效。
   - 代價：每次呼叫都重送，檔案越大 token 成本越高；只在 session 開始讀一次，中途更新要到下個 session 才重新載入（但對話歷史已包含該次寫入）；檔案會持續成長，因此只適合放精簡、長期有效的資訊，大量記憶交給之後的 RAG。
 - 效果：退出後重開 session，agent 能直接回答「在做什麼專案」「用什麼命名慣例」— bare loop 的長期記憶缺口開始被補上。完整的記憶系統（RAG、記憶工具）留給 Memory & Search layer。
+
+### 03-05 Layer 驗證：跨 session 任務
+
+用一個 open-ended 任務驗證 file system layer：「研究並撰寫一頁 Git 歷史文件，研究筆記放 `notes/`，最終成品為 `git-history.md`」。
+
+- **驗證三件事**：
+  1. **保存中間產物**：筆記、草稿等在回合之間持續存在的檔案。
+  2. **更新記憶**：AGENTS.md 記錄專案背景與進度。
+  3. **正確續作**：第二個 session 只靠磁碟上的內容，第一句回應就要連貫。
+- **選這個任務的原因**：open-ended（agent 自己拆解步驟）；有自然的中間產物（筆記 ≠ 成品）；有自然的暫停點（寫完筆記就能退出）；不需要程式執行或網路搜尋；而且主題是 Git，正好用 git 工具 commit 進度。
+- **結果**：
+  | 項目 | 結果 |
+  |---|---|
+  | 檔案工具（建目錄、寫筆記、整合成品） | 穩定 |
+  | Git（commit、log） | 正常 |
+  | AGENTS.md 讀取（harness 負責） | 可靠；新 session 第一句就能回答「上次做到哪」 |
+  | AGENTS.md 寫入（模型負責） | 會更新，但品質不穩定 |
+  | 多步驟指令 | 常需拆成單步，受單輪工具上限限制 |
+- **Soft constraint 的實際失效**：
+  - 更新 AGENTS.md 時只記了已完成的部分，漏了**尚未完成的段落**，需要額外指示補上。
+  - 「成品放在 `git-history.md`」這個關鍵決定沒被寫進 AGENTS.md，續作時需重新告知。
+  - 要求清空 Active Tasks 後，「Current task」仍保留舊描述 — 模型沒有嚴格遵守模板結構。
+  - 結論：讀取必須是 hard（由 harness 保證）；寫入目前是 soft，品質取決於模型，之後 Memory layer 需要強化。
+- **操作技巧**：任務失敗或回 `(no text response - used tools only)` 時，找出沒完成的部分，拆成單一步驟重新下指令。
+- **File System Layer 目前具備的能力**：
+  - 在磁碟上讀、寫、整理檔案（限制在 workspace 內）。
+  - 用 git commit 進度、rollback 錯誤、開 branch 實驗。
+  - workspace 與 git repo、AGENTS.md 都自動初始化。
+  - Context 分兩層：harness 設計者提供的 system prompt + 使用者/agent 維護的 AGENTS.md。
+  - 能完成跨 session 的多階段任務。
+
+## Chapter 4：Code Execution Layer
+
+### 04-01 預定義工具的天花板
+
+- **問題不只是「不能跑程式」，而是預定義工具永遠不夠用。** 工具只涵蓋 harness 設計者預想到的需求，遇到沒想到的任務就卡住：
+  | 使用者需求 | 只有現有工具時 | 有 shell 時 |
+  |---|---|---|
+  | `notes/git-origins.md` 有幾行？ | 整份讀進 context 再手動數 | `wc -l` |
+  | 哪些檔案提到 BitKeeper？ | list → 逐一 read → 手動搜尋 | `grep -rl BitKeeper` |
+  | 系統的 Python 版本？ | 只能猜 | `python --version` |
+  | 抓 GitHub 上 Git 專案的 README | 做不到（沒有網路） | `curl` |
+  | 執行剛寫好的 script | 做不到，無法驗證輸出 | `python script.py` |
+- 對 coding agent 來說，不能執行程式碼是根本缺陷。
+- **「缺什麼補什麼」是跑步機**：每個新任務都會暴露新缺口（解壓縮、JSON 轉 CSV、編譯 TypeScript…），永遠追不完。而且工具越多，schema 越佔 context、越分散模型注意力 — context 是有限資源。
+- **業界兩種解法**（都成功，不是誰比較好）：
+  | | 許多專用工具（Cursor） | 少數通用 primitive（Claude Code） |
+  |---|---|---|
+  | 工具 | code indexing、semantic search、symbol lookup、file editing… | Read、Edit、Bash、Glob、Grep 等少數幾個 |
+  | 優點 | **Precision**：每個工具針對常見 workflow 最佳化 | **Completeness**：天花板就是 shell 的天花板 |
+  | 缺點 | 天花板持續升高，靠 terminal access 補洞 | agent 得自己想出解法 |
+- Cursor 也提供 terminal access — 專用工具處理常見 workflow，shell 當作逃生口。
+- **本專案走 Claude Code 路線**：coding agent 需要高度自主，bash 直接移除工具天花板。**Code 是 meta tool** — agent 能用它組出任何需要的工具。
+- 選型取決於產品：workflow 固定、需要保守受控的產品，專用工具 + 受控 shell 仍是好選擇。
+
