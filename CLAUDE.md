@@ -11,7 +11,7 @@ The user pastes a lesson transcript (English, spoken, with speech-to-text errors
    - Verify what can be verified locally (imports, direct tool calls via `registry.dispatch`, `printf 'quit\n' | .venv/Scripts/python -m harness.agent`). Say plainly what could not be tested (e.g. needs an API key).
    - If a lesson is theory/demo only with no code changes, say so instead of inventing code.
 2. **Summarize the lesson** in the reply: key concepts learned and what was built.
-3. **Add the lesson to `README.md`** (`# AI Engineering Notes` section), under the right chapter heading as `### <chapter>-<lesson> <title>`. Record concepts, design decisions, and any gotchas. Write it as an engineer's technical notes, not a beginner's study log: no "學到/課程/上課" wording, no references to the course or instructor. Also fold in conclusions from the user's follow-up questions about that lesson. Update `## Project structure` if new files were added.
+3. **Add the lesson to `README.md`** (`# AI Engineering Notes` section), under the right chapter heading as `### <chapter>-<lesson> <title>`. Record concepts, design decisions, and any gotchas. Write it as an engineer's technical notes, not a beginner's study log: no "學到/課程/上課" wording, no references to the course or instructor. Also fold in conclusions from the user's follow-up questions about that lesson. Keep `## Project structure` in sync every lesson: new files, and also changed responsibilities of existing files (e.g. new features in agent.py) and the tool count.
 
 Only commit/push when the user asks. Remote: https://github.com/Poyuchao/Harness-Engineering.git (`main`).
 

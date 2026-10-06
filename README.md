@@ -22,16 +22,27 @@ python -m harness.agent
 ## Project structure
 
 ```
-harness/
-├── agent.py            # 入口：對話迴圈、system prompt、模型選擇
-├── memory/
-│   └── agents_md.py    # AGENTS.md：跨 session 記憶的載入與模板
-└── tools/
-    ├── bash.py         # bash meta tool：在 workspace 執行 shell 指令
-    ├── registry.py     # 工具登記處：Tool、ToolRegistry、@tool
-    ├── filesystem.py   # 檔案工具，限制在 .workspace/ 內
-    └── git.py          # git 工具，.workspace/ 自動初始化為 repo
+Harness-Engineering/
+├── harness/
+│   ├── agent.py              # 入口：模型選擇（OpenAI / Kimi）、system prompt、
+│   │                         #   session 迴圈 + ReAct loop、step budget、tool trace
+│   ├── memory/
+│   │   └── agents_md.py      # AGENTS.md 模板建立與載入（session 開始時注入 context）
+│   └── tools/
+│       ├── __init__.py       # import 各工具模組以觸發登記，對外提供 registry
+│       ├── registry.py       # Tool、ToolRegistry（register / get_schemas / dispatch）、@tool
+│       ├── filesystem.py     # read_file、write_file、list_dir、make_dir、delete_file
+│       │                     #   + _resolve_path：限制在 .workspace/
+│       ├── git.py            # git_status、git_diff、git_log、git_commit、git_checkout、git_branch
+│       │                     #   + workspace 自動 git init
+│       └── bash.py           # bash meta tool：在 workspace 執行 shell 指令（Git Bash on Windows）
+├── .workspace/               # agent 的工作區與獨立 git repo（自動建立，gitignored）
+├── .env.example              # OPENAI_API_KEY / KIMI_API_KEY 範本
+├── requirements.txt          # openai、python-dotenv、httpx<0.28
+└── CLAUDE.md                 # Claude Code 專案指示
 ```
+
+**目前的工具（12 個）**：檔案 5 + git 6 + bash 1。
 
 ---
 
