@@ -27,6 +27,18 @@ else:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     EXTRA_BODY = None
 
+# Max tool-call rounds per user turn. When hit, the harness forces the model
+# to summarize and hand control back to the user instead of looping forever.
+STEP_BUDGET = 25
+
+# Synthetic system message injected when the step budget is exceeded. Tells
+# the model why it must stop and what shape the response should take.
+BUDGET_EXCEEDED_MESSAGE = f"""You have reached the step budget for this turn ({STEP_BUDGET} tool-call rounds). Do not make any more tool calls. Instead, respond directly to the user with:
+1. What you accomplished in this turn.
+2. What remains to be done.
+3. What the user should ask next to continue the work.
+Your response will be the final message for this turn. The user will reply to it, and you can continue from there."""
+
 # The system prompt: the first message the model sees on every turn.
 # - Identity: coding assistant running in a terminal.
 # - Output conventions: concise, minimal explanation, fenced code blocks.
@@ -63,6 +75,19 @@ The workspace contains an AGENTS.md file: your durable memory across sessions. I
 - Gotchas: quirks, non-obvious dependencies, things that tripped up earlier sessions.
 - Active tasks: what is currently being worked on. Clear them when complete.
 When updating AGENTS.md, keep its existing structure and section headings, and add to the relevant section instead of replacing unrelated content. If a section still holds a parenthetical hint like "(What this project is...)", replace the hint with real content."""
+
+
+def _call_model(messages: list, **kwargs):
+    """Call the model with the full history and the available tools."""
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        tools=registry.get_schemas(),
+        # Provider-specific params; None for OpenAI, so nothing is sent.
+        extra_body=EXTRA_BODY,
+        **kwargs,
+    )
+    return response.choices[0].message
 
 
 TRACE_MAX_LINES = 20
@@ -111,23 +136,26 @@ def run():
         # 3. Append the user's message to the history
         messages.append({"role": "user", "content": user_input})
 
-        # 4. Call the model with the full history and the available tools
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=registry.get_schemas(),
-            # Provider-specific params; None for OpenAI, so nothing is sent.
-            extra_body=EXTRA_BODY,
-        )
-        message = response.choices[0].message
+        # 4. ReAct loop: reason (model call) -> act (run tools) -> observe
+        # (results go into history) -> repeat until the model answers in text.
+        step_count = 0
+        while True:
+            message = _call_model(messages)
 
-        # 5. If the model asked for tools, run them and call the model again
-        if message.tool_calls:
-            # 5a. Record the assistant's tool-call message in the history
-            messages.append(message.model_dump(exclude_none=True))
+            # 4a. No tool calls: the model has its final answer.
+            if not message.tool_calls:
+                break
 
-            # 5b. Run each requested tool and append its result to the history.
+            # 4b. Out of budget: drop the pending tool calls, tell the model to
+            # wrap up, and get a text-only summary for the user.
+            if step_count >= STEP_BUDGET:
+                messages.append({"role": "system", "content": BUDGET_EXCEEDED_MESSAGE})
+                message = _call_model(messages, tool_choice="none")
+                break
+
+            # 4c. Record the tool-call message, run each tool, append results.
             # The model may request several calls in one response.
+            messages.append(message.model_dump(exclude_none=True))
             for call in message.tool_calls:
                 args = json.loads(call.function.arguments)
                 result = registry.dispatch(call.function.name, args)
@@ -139,26 +167,22 @@ def run():
                         "content": result,
                     }
                 )
+            step_count += 1
 
-            # 5c. Send everything back so the model can write its final answer
-            response = client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                tools=registry.get_schemas(),
-                extra_body=EXTRA_BODY,
+        # 5. After the loop, message.content should hold real text. If not,
+        # something unexpected happened (API edge case, loop bug, credits ran
+        # out). Fail loudly rather than hide it behind a placeholder.
+        assistant_text = message.content
+        if not assistant_text:
+            raise RuntimeError(
+                "ReAct loop ended but message.content is empty. This shouldn't "
+                "happen; check the API response and the loop's termination logic."
             )
-            message = response.choices[0].message
 
-        # 6. Extract the text reply (works whether or not tools were called).
-        # With only one round of tool calls, the second response may itself be
-        # another tool call with no text; fall back to a placeholder until the
-        # ReAct loop lands.
-        assistant_text = message.content or "(no text response - used tools only)"
-
-        # 7. Append the reply to the history so the next turn sees it
+        # 6. Append the reply to the history so the next turn sees it
         messages.append({"role": "assistant", "content": assistant_text})
 
-        # 8. Show the reply
+        # 7. Show the reply
         print(f"\nAgent: {assistant_text}\n")
 
 

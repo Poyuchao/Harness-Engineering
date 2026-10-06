@@ -246,3 +246,20 @@ harness/
   - bash 中的 `python` 取決於 `PATH`。未啟用 venv 時會打到 Windows Store 的 python 捷徑（exit code 49），因此把 harness 自己的 Python（`sys.executable` 所在目錄）放在 bash `PATH` 最前面。
 - **Tool trace**：每次工具呼叫在終端機印出 `[tool] name(args)` 與原始結果（最多 20 行）。原本工具結果只進 `messages`，使用者只看得到**模型的轉述** — 轉述可能出錯或編造（例如宣稱更新了 AGENTS.md 實際沒有）。trace 讓實際執行內容可驗證，也是 observability 的雛形。
 
+### 04-04 ReAct loop
+
+- 單輪工具呼叫改成 **ReAct loop**：reason（呼叫模型）→ act（執行工具）→ observe（結果寫回歷史）→ 重複，直到模型回傳純文字。兩層迴圈：外層是使用者 session，內層是單一 turn 的 ReAct loop。
+- **離開 ReAct loop 只有兩種方式**：
+  1. 模型回應沒有 `tool_calls` → 已有最終答案。
+  2. 達到 **step budget** → 強制收尾。
+- **Step budget（`STEP_BUDGET = 25`）**：每個 user turn 最多 25 輪工具呼叫，避免無限迴圈與 API 費用失控。
+  - 達到上限時注入一則 **synthetic system message**，要求模型不再呼叫工具，改為回報：(1) 這輪完成了什麼 (2) 還剩什麼 (3) 使用者下一步該問什麼 — 讓工作能延續。
+  - 實作細節：budget 檢查放在執行工具**之前**，被擋下的 tool call 不寫入歷史（否則會留下沒有對應結果的 tool call）；收尾呼叫帶 `tool_choice="none"`，保證回傳文字；budget 數字由常數帶入，不寫死在訊息裡。
+- **移除 `(no text response - used tools only)` 佔位字串**：loop 結束後 `content` 應該一定有文字；若為空代表異常（API edge case、loop 終止邏輯 bug、額度用完），直接 `raise` — **silent fallback 會掩蓋真正的問題**。
+- **效果**：
+  - 「寫 `fib.py` → 執行 → 顯示輸出」一句指令完成。
+  - 缺少資訊時（例如 `config.json` 不存在），agent 會在探索後主動詢問使用者，而不是卡住或亂做。
+  - 「建立含 `pyproject.toml`、`src/`、模組的專案 → 執行驗證 → commit」一次完成，混用 file system、bash、git 工具。
+  - 使用者不再需要一步步牽著 agent 走到終點 — action → observation 循環由 agent 自己推動。
+- 之前筆記中「單輪工具上限」相關的限制（03-02 ~ 04-03）至此解除。
+
