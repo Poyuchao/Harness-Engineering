@@ -202,3 +202,23 @@ harness/
 - **本專案走 Claude Code 路線**：coding agent 需要高度自主，bash 直接移除工具天花板。**Code 是 meta tool** — agent 能用它組出任何需要的工具。
 - 選型取決於產品：workflow 固定、需要保守受控的產品，專用工具 + 受控 shell 仍是好選擇。
 
+### 04-02 Code as a meta tool
+
+- **Meta tool**：讓 agent 在 runtime **自己建構其他工具**的工具。需要時當場產生程式碼 → 執行 → 取得結果 → 丟棄，不寫入檔案、不持久化。
+- 設計問題從「agent 該有哪些工具？」（答案趨近無限）轉成「**最小的一組通用 primitive，能讓 agent 建構出任何東西**是什麼？」
+- **為什麼選 Bash**（候選還有 Python runner、跨語言 code runner）：
+  1. **Universality**：Mac、Linux VM、Docker container、CI runner 都有 bash 或相容 shell，不需逐環境設定。
+  2. **系統工具**：`grep`、`find`、`curl`、`awk`、`sed`、`sort`、`uniq`、`wc`、`tar`… 經過數十年打磨、快且可靠，免費取得；系統新裝的工具也自動可用。
+  3. **語言直譯器**：裝了 Python 就能跑 Python，裝了 Node 就能跑 Node。Python runner 只是 bash 能力的子集。
+  4. **Composability**：pipe、redirect、command substitution、背景執行、指令串接 — 少量工具組合出近乎無限的能力。
+  5. **模型本來就精通**：訓練資料含大量 shell（Stack Overflow、README、man page、CI 設定）。自訂語法的 meta tool 反而要模型每次從文件學。
+- **Runtime tool synthesis 範例**：「`Linus` 在所有筆記中出現幾次？」
+  - 沒有 meta tool：`list_dir` → 逐檔 `read_file` → 模型自己數 → 加總。工具呼叫多、context 被檔案內容塞滿，而且**模型數數不可靠**（同 strawberry 問題）。
+  - 有 bash：一行 `grep -c Linus notes/*.md | awk -F: '{s+=$2} END {print s}'`，只回傳一個數字。
+  - 沒有「跨檔計數」工具，以後也不會有 — agent 當場用 bash primitive 組出來。
+- **加上 bash 後 agent 行為的改變**：
+  1. **開始探索**：寫 script → 執行 → 觀察輸出 → 修 bug → 重複，形成 propose → execute → observe → adjust 循環。
+  2. **失敗模式改變**：錯誤（stderr、exit code、`No such file or directory`）變得**可觀察**，agent 能依回饋換方法。
+  3. **回饋迴圈閉合**：action → observation → reasoning → next action。真正重複執行需要 ReAct loop，bash 提供的是讓迴圈有意義的回饋。
+- 環境備註（Windows）：`PATH` 上的 `bash` 是 WSL 啟動器（`C:\Windows\System32\bash.exe`），本機 WSL 只有 `docker-desktop` distro，不能用；實作時應指定 Git Bash（`C:\Program Files\Git\bin\bash.exe`，內含 GNU grep/awk/wc）。
+
