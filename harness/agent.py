@@ -34,6 +34,7 @@ else:
 #   itself is a hard constraint enforced in code, not in this prompt).
 # - Git: six versioning tools. The workspace is auto-initialized as a repo in
 #   code (hard); the commit/branch habits below are soft guidance.
+# - Bash: the meta tool, for anything the specific tools don't cover.
 # - Memory: how to maintain AGENTS.md. Loading it is done by the harness
 #   (hard); deciding what to write is left to the model (soft).
 SYSTEM_PROMPT = """You are a coding assistant running in the terminal, helping a developer with software engineering tasks.
@@ -50,6 +51,11 @@ You have six git tools (git_status, git_diff, git_log, git_commit, git_checkout,
 - Write meaningful commit messages that describe what and why, in the present tense (e.g. "Add user authentication module").
 - When trying an alternative approach, create a branch first so the main line of work stays intact.
 
+You have one more tool: bash. It executes shell commands in the workspace with full shell interpretation, so pipes, redirects, and command chaining all work. Use bash for anything the specific tools above don't cover: running scripts (python foo.py, node foo.js), invoking system utilities (grep, curl, wc), installing packages (pip install ...), or exploring the environment (ls, pwd, which python).
+- Prefer the specific tools when they apply. To read a file, use read_file, not `cat`. To commit, use git_commit. The specific tools are safer, faster, and clearer to trace.
+- Reach for bash when the specific tools don't cover what you need, which is often, because software work is varied.
+- bash commands use the workspace as their working directory. `cd` inside a bash command does not persist to the next call; each call starts fresh from the workspace root.
+
 The workspace contains an AGENTS.md file: your durable memory across sessions. It is automatically loaded into your context at the start of every session. Update it with write_file when you learn something worth remembering for future sessions. Good things to write:
 - Project context: what this codebase is, what it does, who uses it.
 - Conventions you've observed: code style, libraries, naming patterns.
@@ -57,6 +63,20 @@ The workspace contains an AGENTS.md file: your durable memory across sessions. I
 - Gotchas: quirks, non-obvious dependencies, things that tripped up earlier sessions.
 - Active tasks: what is currently being worked on. Clear them when complete.
 When updating AGENTS.md, keep its existing structure and section headings, and add to the relevant section instead of replacing unrelated content. If a section still holds a parenthetical hint like "(What this project is...)", replace the hint with real content."""
+
+
+TRACE_MAX_LINES = 20
+
+
+def _trace(name: str, args: dict, result: str) -> None:
+    """Print a tool call and its raw result, so the user sees what actually ran
+    instead of relying on the model's summary of it."""
+    print(f"\n  [tool] {name}({json.dumps(args, ensure_ascii=False)})")
+    lines = result.splitlines() or [""]
+    for line in lines[:TRACE_MAX_LINES]:
+        print(f"  | {line}")
+    if len(lines) > TRACE_MAX_LINES:
+        print(f"  | ... ({len(lines) - TRACE_MAX_LINES} more lines)")
 
 
 def run():
@@ -111,6 +131,7 @@ def run():
             for call in message.tool_calls:
                 args = json.loads(call.function.arguments)
                 result = registry.dispatch(call.function.name, args)
+                _trace(call.function.name, args, result)
                 messages.append(
                     {
                         "role": "tool",

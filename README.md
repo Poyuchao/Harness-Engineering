@@ -27,6 +27,7 @@ harness/
 ├── memory/
 │   └── agents_md.py    # AGENTS.md：跨 session 記憶的載入與模板
 └── tools/
+    ├── bash.py         # bash meta tool：在 workspace 執行 shell 指令
     ├── registry.py     # 工具登記處：Tool、ToolRegistry、@tool
     ├── filesystem.py   # 檔案工具，限制在 .workspace/ 內
     └── git.py          # git 工具，.workspace/ 自動初始化為 repo
@@ -221,4 +222,27 @@ harness/
   2. **失敗模式改變**：錯誤（stderr、exit code、`No such file or directory`）變得**可觀察**，agent 能依回饋換方法。
   3. **回饋迴圈閉合**：action → observation → reasoning → next action。真正重複執行需要 ReAct loop，bash 提供的是讓迴圈有意義的回饋。
 - 環境備註（Windows）：`PATH` 上的 `bash` 是 WSL 啟動器（`C:\Windows\System32\bash.exe`），本機 WSL 只有 `docker-desktop` distro，不能用；實作時應指定 Git Bash（`C:\Program Files\Git\bin\bash.exe`，內含 GNU grep/awk/wc）。
+
+### 04-03 Bash tool
+
+- **設計決策**：
+  | 項目 | 決策 | 理由 |
+  |---|---|---|
+  | 執行方式 | 把模型產生的指令字串交給 shell 直接執行（`bash -c "<command>"`） | pipe、redirect、chaining 原生可用。git 工具用 argument list 是因為只需要 git 本身，不需要 shell |
+  | 工作目錄 | `.workspace/` | 和檔案、git 工具一致 |
+  | Timeout | 60 秒（git 為 10 秒） | 要容納 `pip install`、`curl`、`git clone` |
+  | 輸出 | stdout 為主，stderr 非空時附加在後（`--- stderr ---`） | 程式常在兩個 stream 都輸出有用資訊；git 只取其一 |
+  | 錯誤標示 | `[bash exited with code N]`、`[command timed out after 60s and was killed]` | 方括號標示 **harness 產生的資訊**，和 shell 輸出區分；否則模型只看 stdout 可能誤判成功 |
+  | 工具名稱 | `bash` | 符合模型對 shell 的既有認知 |
+- 安全性：直接執行任意 shell 字串是風險，之後以 allow list / deny list 處理。目前只有工作目錄在 workspace，**路徑並未被限制**（`cd ..` 可離開）— 和 `_resolve_path` 的 hard constraint 不同。
+- **System prompt 規則**：
+  - 專用工具優先：讀檔用 `read_file` 不用 `cat`，commit 用 `git_commit` — 更安全、更快、更容易追蹤。
+  - 專用工具不涵蓋時才用 bash：執行 script、系統工具（`grep`/`curl`/`wc`）、`pip install`、探索環境（`ls`/`pwd`/`which python`）。
+  - 每次 bash 呼叫都是新 shell，`cd` 不會延續到下一次呼叫。
+- 實測行為：`write_file` 寫 script → `bash` 執行 — 模型會遵守「專用工具優先、bash 補位」。但「寫完再執行」仍需兩句指令（單輪工具上限）；action → observation 的循環還是由使用者推動，要靠 ReAct loop 交給 agent。
+- 實作細節（Windows）：
+  - `subprocess.run(..., shell=True)` 在 Windows 用的是 `cmd.exe` 而不是 bash，所以改為明確呼叫 `[BASH, "-c", command]`。
+  - `PATH` 上的 `bash` 是 WSL 啟動器，因此 `_find_bash()` 從 `git.exe` 位置推導 Git Bash（`<Git>\bin\bash.exe`）；非 Windows 用 `shutil.which("bash")`。
+  - bash 中的 `python` 取決於 `PATH`。未啟用 venv 時會打到 Windows Store 的 python 捷徑（exit code 49），因此把 harness 自己的 Python（`sys.executable` 所在目錄）放在 bash `PATH` 最前面。
+- **Tool trace**：每次工具呼叫在終端機印出 `[tool] name(args)` 與原始結果（最多 20 行）。原本工具結果只進 `messages`，使用者只看得到**模型的轉述** — 轉述可能出錯或編造（例如宣稱更新了 AGENTS.md 實際沒有）。trace 讓實際執行內容可驗證，也是 observability 的雛形。
 
